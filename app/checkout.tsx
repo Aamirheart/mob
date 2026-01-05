@@ -178,7 +178,7 @@ export default function CheckoutScreen() {
     }
   };
 
-  const handlePlaceOrder = async () => {
+const handlePlaceOrder = async () => {
     if (!selectedPaymentProvider || !cart) {
       Alert.alert('Error', 'Select a payment provider');
       return;
@@ -187,48 +187,58 @@ export default function CheckoutScreen() {
     setLoading(true);
 
     try {
-      // 1. Create the Deep Link URL
       const redirectUrl = Linking.createURL('order-confirmation'); 
       console.log("🔗 Redirecting to:", redirectUrl);
 
-      // 2. Save URL to Cart Metadata
+      // 1. Save URL to Cart Metadata
       await sdk.store.cart.update(cart.id, {
-        metadata: {
-          mobile_return_url: redirectUrl
-        }
+        metadata: { mobile_return_url: redirectUrl }
       });
 
-      // 3. Initiate Payment
+      console.log("🚀 Initiating Payment Session...");
       const response = await sdk.store.payment.initiatePaymentSession(cart, {
         provider_id: selectedPaymentProvider,
       });
 
       const collection = response.payment_collection;
+      const sessions = collection?.payment_sessions || [];
 
-      // 4. Handle Cashfree
-      if (selectedPaymentProvider === 'cashfree') {
-        const session = collection?.payment_sessions?.find(
-          (s) => s.provider_id === 'cashfree'
-        );
+      // 👇 FIX 1: Check if the selected provider IS Cashfree (handling "pp_" prefix)
+      if (selectedPaymentProvider.includes('cashfree')) {
+        const session = sessions.find(s => s.provider_id === selectedPaymentProvider);
+        const data = session?.data as any || {};
+
+        console.log("🔎 Cashfree Session Data:", JSON.stringify(data, null, 2));
+
+        // 👇 FIX 2: Use provided link OR construct it using the Session ID
+        // (Cashfree Sandbox URL format)
+        let paymentLink = data.payment_link;
         
-        const paymentLink = session?.data?.payment_link as string;
+        if (!paymentLink && data.payment_session_id) {
+           console.log("⚠️ Link missing, constructing fallback URL...");
+           // This URL works for Sandbox to trigger the web checkout
+           paymentLink = `https://sandbox.cashfree.com/pg/orders/pay?payment_session_id=${data.payment_session_id}`;
+        }
 
-        if (paymentLink) {
-          // Open Browser
-          const result = await WebBrowser.openAuthSessionAsync(paymentLink, redirectUrl);
-
-          // If successful redirect detected, assume payment is done
-          if (result.type === 'success') {
-            await completeOrder(); // 👈 Now this function handles retries
-          } else {
-            setLoading(false);
-            Alert.alert("Payment Cancelled", "You closed the payment window.");
-          }
+        if (!paymentLink) {
+          Alert.alert("Configuration Error", "No payment link or session ID found.");
+          setLoading(false);
           return;
-        } 
+        }
+
+        console.log("🌏 Opening Browser:", paymentLink);
+        const result = await WebBrowser.openAuthSessionAsync(paymentLink, redirectUrl);
+        
+        if (result.type === 'success') {
+          await completeOrder();
+        } else {
+          setLoading(false);
+          Alert.alert("Payment Cancelled", "Window closed.");
+        }
+        return;
       }
 
-      // Fallback for Manual/COD
+      // Fallback for other providers
       await completeOrder();
 
     } catch (err: any) {
@@ -237,7 +247,6 @@ export default function CheckoutScreen() {
       setLoading(false);
     }
   };
-
   // 👇 UPDATED: Robust Logic with Retries
   const completeOrder = async (retryCount = 0) => {
     try {
