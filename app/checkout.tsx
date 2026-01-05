@@ -9,6 +9,8 @@ import type { HttpTypes } from '@medusajs/types';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, StyleSheet, Text, View } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
+import * as Linking from 'expo-linking';
 
 type CheckoutStep = 'delivery' | 'shipping' | 'payment';
 
@@ -43,17 +45,14 @@ export default function CheckoutScreen() {
     phone: '',
   });
 
-  // Shipping step
+  // Shipping & Payment state
   const [shippingOptions, setShippingOptions] = useState<HttpTypes.StoreCartShippingOption[]>([]);
   const [selectedShippingOption, setSelectedShippingOption] = useState<string | null>(null);
-
-  // Payment step
   const [paymentProviders, setPaymentProviders] = useState<HttpTypes.StorePaymentProvider[]>([]);
   const [selectedPaymentProvider, setSelectedPaymentProvider] = useState<string | null>(null);
 
-  // Sync form state with cart values (handles both prepopulation and reset)
+  // Sync form with cart
   useEffect(() => {
-    // Populate form with existing cart data or reset to empty values
     setEmail(cart?.email || '');
     setShippingAddress({
       firstName: cart?.shipping_address?.first_name || '',
@@ -65,10 +64,8 @@ export default function CheckoutScreen() {
       phone: cart?.shipping_address?.phone || '',
     });
     
-    // Billing address - check if different from shipping
     const hasDifferentBilling = cart?.billing_address && 
-      (cart.billing_address.address_1 !== cart.shipping_address?.address_1 ||
-       cart.billing_address.city !== cart.shipping_address?.city);
+      (cart.billing_address.address_1 !== cart.shipping_address?.address_1);
     
     setUseSameForBilling(!hasDifferentBilling);
     setBillingAddress({
@@ -81,7 +78,6 @@ export default function CheckoutScreen() {
       phone: cart?.billing_address?.phone || '',
     });
     
-    // Reset selections when cart is null
     if (!cart) {
       setSelectedShippingOption(null);
       setSelectedPaymentProvider(null);
@@ -89,17 +85,14 @@ export default function CheckoutScreen() {
     }
   }, [cart]);
 
+  // Fetch Options
   const fetchShippingOptions = useCallback(async () => {
     if (!cart) return;
-
     try {
       setLoading(true);
-      const { shipping_options } = await sdk.store.fulfillment.listCartOptions({
-        cart_id: cart.id,
-      });
+      const { shipping_options } = await sdk.store.fulfillment.listCartOptions({ cart_id: cart.id });
       setShippingOptions(shipping_options || []);
     } catch (err) {
-      console.error('Failed to fetch shipping options:', err);
       Alert.alert('Error', 'Failed to load shipping options');
     } finally {
       setLoading(false);
@@ -108,15 +101,11 @@ export default function CheckoutScreen() {
 
   const fetchPaymentProviders = useCallback(async () => {
     if (!cart) return;
-
     try {
       setLoading(true);
-      const { payment_providers } = await sdk.store.payment.listPaymentProviders({
-        region_id: cart.region_id || '',
-      });
+      const { payment_providers } = await sdk.store.payment.listPaymentProviders({ region_id: cart.region_id || '' });
       setPaymentProviders(payment_providers || []);
     } catch (err) {
-      console.error('Failed to fetch payment providers:', err);
       Alert.alert('Error', 'Failed to load payment providers');
     } finally {
       setLoading(false);
@@ -124,37 +113,22 @@ export default function CheckoutScreen() {
   }, [cart]);
 
   useEffect(() => {
-    if (currentStep === 'shipping') {
-      fetchShippingOptions();
-    } else if (currentStep === 'payment') {
-      fetchPaymentProviders();
-    }
+    if (currentStep === 'shipping') fetchShippingOptions();
+    if (currentStep === 'payment') fetchPaymentProviders();
   }, [currentStep, fetchShippingOptions, fetchPaymentProviders]);
 
+  // Handlers
   const handleDeliveryNext = async () => {
-    // Validate shipping address
-    if (!email || !shippingAddress.firstName || !shippingAddress.lastName || 
-        !shippingAddress.address || !shippingAddress.city || !shippingAddress.postalCode || 
-        !shippingAddress.countryCode || !shippingAddress.phone) {
-      Alert.alert('Error', 'Please fill in all shipping address fields');
+    if (!email || !shippingAddress.firstName || !shippingAddress.address) {
+      Alert.alert('Error', 'Please fill in required fields');
       return;
-    }
-
-    // Validate billing address if different
-    if (!useSameForBilling) {
-      if (!billingAddress.firstName || !billingAddress.lastName || !billingAddress.address || 
-          !billingAddress.city || !billingAddress.postalCode || !billingAddress.countryCode || 
-          !billingAddress.phone) {
-        Alert.alert('Error', 'Please fill in all billing address fields');
-        return;
-      }
     }
 
     if (!cart) return;
 
     try {
       setLoading(true);
-      const shippingAddressData = {
+      const addressData = {
         first_name: shippingAddress.firstName,
         last_name: shippingAddress.lastName,
         address_1: shippingAddress.address,
@@ -164,27 +138,24 @@ export default function CheckoutScreen() {
         phone: shippingAddress.phone,
       };
 
-      const billingAddressData = useSameForBilling ? shippingAddressData : {
-        first_name: billingAddress.firstName,
-        last_name: billingAddress.lastName,
-        address_1: billingAddress.address,
-        city: billingAddress.city,
-        postal_code: billingAddress.postalCode,
-        country_code: billingAddress.countryCode,
-        phone: billingAddress.phone,
-      };
-
       await sdk.store.cart.update(cart.id, {
         email,
-        shipping_address: shippingAddressData,
-        billing_address: billingAddressData,
+        shipping_address: addressData,
+        billing_address: useSameForBilling ? addressData : {
+          first_name: billingAddress.firstName,
+          last_name: billingAddress.lastName,
+          address_1: billingAddress.address,
+          city: billingAddress.city,
+          postal_code: billingAddress.postalCode,
+          country_code: billingAddress.countryCode,
+          phone: billingAddress.phone,
+        },
       });
 
       await refreshCart();
       setCurrentStep('shipping');
     } catch (err) {
-      console.error('Failed to update cart:', err);
-      Alert.alert('Error', 'Failed to save delivery information');
+      Alert.alert('Error', 'Failed to save information');
     } finally {
       setLoading(false);
     }
@@ -192,70 +163,99 @@ export default function CheckoutScreen() {
 
   const handleShippingNext = async () => {
     if (!selectedShippingOption || !cart) {
-      Alert.alert('Error', 'Please select a shipping method');
+      Alert.alert('Error', 'Select a shipping method');
       return;
     }
-
     try {
       setLoading(true);
-
-      await sdk.store.cart.addShippingMethod(cart.id, {
-        option_id: selectedShippingOption,
-      });
-
+      await sdk.store.cart.addShippingMethod(cart.id, { option_id: selectedShippingOption });
       await refreshCart();
       setCurrentStep('payment');
     } catch (err) {
-      console.error('Failed to add shipping method:', err);
-      Alert.alert('Error', 'Failed to save shipping method');
+      Alert.alert('Error', 'Failed to save shipping');
     } finally {
       setLoading(false);
     }
   };
 
+  // 👇 FIXED: Pass the full 'cart' object, just like in your frontend repo
+// 👇 FIXED: Use Metadata to pass the URL
   const handlePlaceOrder = async () => {
     if (!selectedPaymentProvider || !cart) {
-      Alert.alert('Error', 'Please select a payment provider');
+      Alert.alert('Error', 'Select a payment provider');
       return;
     }
 
-    try {
-      setLoading(true);
+    setLoading(true);
 
-      // Create payment session
-      await sdk.store.payment.initiatePaymentSession(cart, {
+    try {
+      const redirectUrl = Linking.createURL('order-confirmation'); 
+      console.log("🔗 Redirecting to:", redirectUrl);
+
+      // 1. UPDATE CART METADATA (Pass the URL securely here)
+      await sdk.store.cart.update(cart.id, {
+        metadata: {
+          mobile_return_url: redirectUrl
+        }
+      });
+
+      // 2. INITIATE PAYMENT (Pass 'cart' object, NO context/data field)
+      const response = await sdk.store.payment.initiatePaymentSession(cart, {
         provider_id: selectedPaymentProvider,
       });
 
-      // Complete cart (converts cart to order on backend)
+      // 3. Handle Cashfree Logic
+      const collection = response.payment_collection;
+
+      if (selectedPaymentProvider === 'cashfree') {
+        const session = collection?.payment_sessions?.find(
+          (s) => s.provider_id === 'cashfree'
+        );
+        
+        // This link comes from the backend service (see Step 2)
+        const paymentLink = session?.data?.payment_link as string;
+
+        if (paymentLink) {
+          const result = await WebBrowser.openAuthSessionAsync(paymentLink, redirectUrl);
+          
+          if (result.type === 'success' || result.type === 'dismiss') {
+            await completeOrder();
+          } else {
+            setLoading(false);
+          }
+          return;
+        } 
+      }
+
+      await completeOrder();
+
+    } catch (err: any) {
+      console.error('Order Error:', err);
+      Alert.alert('Error', err?.message || 'Failed to initiate payment');
+      setLoading(false);
+    }
+  };
+  const completeOrder = async () => {
+    try {
+      if (!cart) return;
+      
       const result = await sdk.store.cart.complete(cart.id);
 
       if (result.type === 'order') {
-        // Navigate to order confirmation first
-        // Cart will be cleared on the order confirmation page to prevent empty cart flash
         router.replace(`/order-confirmation/${result.order.id}`);
       } else {
-        Alert.alert('Error', result.error?.message || 'Failed to complete order');
+        Alert.alert('Payment Incomplete', result.error?.message || 'Please try paying again.');
       }
     } catch (err: any) {
-      console.error('Failed to complete order:', err);
+      console.error('Completion Error:', err);
       Alert.alert('Error', err?.message || 'Failed to complete order');
     } finally {
       setLoading(false);
     }
   };
 
-  if (!cart) {
-    return (
-      <View style={[styles.centerContainer, { backgroundColor: colors.background }]}>
-        <Text style={[styles.errorText, { color: colors.text }]}>
-          No cart found. Please add items to your cart first.
-        </Text>
-      </View>
-    );
-  }
+  if (!cart) return <View style={styles.centerContainer}><Text>No Cart Found</Text></View>;
 
-  // Active step uses inverted colors: white bg with dark text in dark mode, tint bg with white text in light mode
   const activeStepBg = colorScheme === 'dark' ? '#fff' : colors.tint;
   const activeStepText = colorScheme === 'dark' ? '#000' : '#fff';
 
@@ -264,33 +264,10 @@ export default function CheckoutScreen() {
       <View style={[styles.steps, { borderBottomColor: colors.border }]}>
         {(['delivery', 'shipping', 'payment'] as CheckoutStep[]).map((step, index) => (
           <View key={step} style={styles.stepIndicator}>
-            <View
-              style={[
-                styles.stepCircle,
-                {
-                  backgroundColor:
-                    currentStep === step ? activeStepBg : colors.icon + '30',
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.stepNumber,
-                  { color: currentStep === step ? activeStepText : colors.icon },
-                ]}
-              >
-                {index + 1}
-              </Text>
+            <View style={[styles.stepCircle, { backgroundColor: currentStep === step ? activeStepBg : colors.icon + '30' }]}>
+              <Text style={[styles.stepNumber, { color: currentStep === step ? activeStepText : colors.icon }]}>{index + 1}</Text>
             </View>
-            <Text
-              style={[
-                styles.stepLabel,
-                {
-                  color: currentStep === step ? colors.text : colors.icon,
-                  fontWeight: currentStep === step ? '600' : '400',
-                },
-              ]}
-            >
+            <Text style={[styles.stepLabel, { color: currentStep === step ? colors.text : colors.icon, fontWeight: currentStep === step ? '600' : '400' }]}>
               {step.charAt(0).toUpperCase() + step.slice(1)}
             </Text>
           </View>
@@ -306,17 +283,12 @@ export default function CheckoutScreen() {
             useSameForBilling={useSameForBilling}
             loading={loading}
             onEmailChange={setEmail}
-            onShippingAddressChange={(field, value) => 
-              setShippingAddress(prev => ({ ...prev, [field]: value }))
-            }
-            onBillingAddressChange={(field, value) => 
-              setBillingAddress(prev => ({ ...prev, [field]: value }))
-            }
+            onShippingAddressChange={(f, v) => setShippingAddress(p => ({ ...p, [f]: v }))}
+            onBillingAddressChange={(f, v) => setBillingAddress(p => ({ ...p, [f]: v }))}
             onUseSameForBillingChange={setUseSameForBilling}
             onNext={handleDeliveryNext}
           />
         )}
-
         {currentStep === 'shipping' && (
           <ShippingStep
             shippingOptions={shippingOptions}
@@ -328,7 +300,6 @@ export default function CheckoutScreen() {
             onNext={handleShippingNext}
           />
         )}
-
         {currentStep === 'payment' && (
           <PaymentStep
             cart={cart}
@@ -346,45 +317,12 @@ export default function CheckoutScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  centerContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  steps: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    padding: 20,
-    borderBottomWidth: 1,
-  },
-  stepIndicator: {
-    alignItems: 'center',
-  },
-  stepCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  stepNumber: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  stepLabel: {
-    fontSize: 12,
-  },
-  content: {
-    flex: 1,
-  },
-  errorText: {
-    fontSize: 16,
-    textAlign: 'center',
-  },
+  container: { flex: 1 },
+  centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  steps: { flexDirection: 'row', justifyContent: 'space-around', padding: 20, borderBottomWidth: 1 },
+  stepIndicator: { alignItems: 'center' },
+  stepCircle: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+  stepNumber: { fontSize: 16, fontWeight: '600' },
+  stepLabel: { fontSize: 12 },
+  content: { flex: 1 },
 });
-

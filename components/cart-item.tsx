@@ -21,6 +21,15 @@ export const CartItem = React.memo(function CartItem({ item, currencyCode, onUpd
   const thumbnail = item.thumbnail || item.variant?.product?.thumbnail;
   const total = item.subtotal || 0;
 
+  // 👇 Helper to handle logic: If 1 -> Remove, Else -> Decrease
+  const handleDecrease = () => {
+    if (item.quantity === 1) {
+      onRemove();
+    } else {
+      onUpdateQuantity(item.quantity - 1);
+    }
+  };
+
   return (
     <View style={[styles.container, { borderBottomColor: colors.icon + "30" }]}>
       <Image
@@ -44,15 +53,18 @@ export const CartItem = React.memo(function CartItem({ item, currencyCode, onUpd
         </View>
         <View style={styles.actions}>
           <View style={styles.quantityContainer}>
+            {/* 👇 UPDATED BUTTON */}
             <TouchableOpacity
               style={[styles.quantityButton, { borderColor: colors.icon }]}
-              onPress={() => onUpdateQuantity(Math.max(1, item.quantity - 1))}
+              onPress={handleDecrease}
             >
               <Text style={[styles.quantityButtonText, { color: colors.text }]}>-</Text>
             </TouchableOpacity>
+            
             <Text style={[styles.quantity, { color: colors.text }]}>
               {item.quantity}
             </Text>
+            
             <TouchableOpacity
               style={[styles.quantityButton, { borderColor: colors.icon }]}
               onPress={() => onUpdateQuantity(item.quantity + 1)}
@@ -69,7 +81,9 @@ export const CartItem = React.memo(function CartItem({ item, currencyCode, onUpd
   );
 });
 
+// ... keep styles the same
 const styles = StyleSheet.create({
+    // ... existing styles
   container: {
     flexDirection: "row",
     padding: 16,
@@ -135,4 +149,3 @@ const styles = StyleSheet.create({
     padding: 4,
   },
 });
-

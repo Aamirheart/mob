@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 
 interface AddressFormProps {
+  email: string,
   firstName: string;
   lastName: string;
   address: string;
