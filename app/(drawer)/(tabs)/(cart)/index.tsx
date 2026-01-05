@@ -5,20 +5,20 @@ import { Colors } from '@/constants/theme';
 import { useCart } from '@/context/cart-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { formatPrice } from '@/lib/format-price';
-import { sdk } from '@/lib/sdk'; // Make sure to import sdk
+import { sdk } from '@/lib/sdk'; // 1. Import SDK
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
-import { FlatList, StyleSheet, Text, TextInput, View, Alert, ActivityIndicator } from 'react-native';
+import React, { useState } from 'react'; // 2. Import useState
+import { FlatList, StyleSheet, Text, View, TextInput, Alert, ActivityIndicator, TouchableOpacity } from 'react-native'; // 3. Add UI imports
 
 export default function CartScreen() {
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const router = useRouter();
   
-  // 1. Add refreshCart to destructuring
+  // 4. Get refreshCart to update totals
   const { cart, updateItemQuantity, removeItem, loading, refreshCart } = useCart();
 
-  // 2. Local state for the promo code input
+  // 5. Local state for coupon input
   const [promoCode, setPromoCode] = useState('');
   const [applyingPromo, setApplyingPromo] = useState(false);
 
@@ -28,20 +28,18 @@ export default function CartScreen() {
     return <Loading message="Loading cart..." />;
   }
 
-  // 3. Handler to apply the coupon
+  // --- COUPON LOGIC START ---
   const handleApplyCoupon = async () => {
     if (!promoCode.trim() || !cart) return;
     
     setApplyingPromo(true);
     try {
-      // Update the cart with the discount code
+      // Medusa V2: Use 'promo_codes' array
       await sdk.store.cart.update(cart.id, {
-        discounts: [{ code: promoCode }] 
+        promo_codes: [promoCode] 
       });
       
-      // Refresh the cart to see the new totals
-      await refreshCart();
-      
+      await refreshCart(); // Refresh to see the new totals
       setPromoCode('');
       Alert.alert("Success", "Coupon applied successfully!");
     } catch (error: any) {
@@ -52,20 +50,26 @@ export default function CartScreen() {
     }
   };
 
-  // 4. Handler to remove the coupon (Optional but recommended)
-  const handleRemoveCoupon = async () => {
+  const handleRemoveCoupon = async (codeToRemove: string) => {
     if (!cart) return;
     setApplyingPromo(true);
     try {
-        // Sending empty array removes discounts
-        await sdk.store.cart.update(cart.id, { discounts: [] });
+        // Medusa V2: We update the list by removing the specific code
+        const currentCodes = cart.promotions?.map(p => p.code) || [];
+        const newCodes = currentCodes.filter(c => c !== codeToRemove);
+
+        await sdk.store.cart.update(cart.id, { 
+            promo_codes: newCodes 
+        });
         await refreshCart();
-    } catch (error) {
+    } catch (error: any) {
         console.error(error);
+        Alert.alert("Error", "Failed to remove coupon");
     } finally {
         setApplyingPromo(false);
     }
   };
+  // --- COUPON LOGIC END ---
 
   if (isEmpty) {
     return (
@@ -101,48 +105,52 @@ export default function CartScreen() {
       
       <View style={[styles.footer, { backgroundColor: colors.background, borderTopColor: colors.icon + '30' }]}>
         
-        {/* --- COUPON SECTION START --- */}
+        {/* --- COUPON UI SECTION START --- */}
         <View style={styles.couponContainer}>
-            <TextInput 
-                style={[
-                    styles.couponInput, 
-                    { 
-                        color: colors.text, 
-                        borderColor: colors.border,
-                        backgroundColor: colorScheme === 'dark' ? '#333' : '#f9f9f9'
-                    }
-                ]}
-                placeholder="Enter promo code"
-                placeholderTextColor={colors.icon}
-                value={promoCode}
-                onChangeText={setPromoCode}
-                autoCapitalize="characters"
-            />
-            <Button 
-                title={applyingPromo ? "" : "Apply"}
-                onPress={handleApplyCoupon}
-                style={styles.applyButton}
-                disabled={applyingPromo || !promoCode}
-                variant="secondary" // Use a secondary style if available, or default
-            >
-                {applyingPromo && <ActivityIndicator color={colors.text} size="small" />}
-            </Button>
-        </View>
-
-        {/* Show applied discounts */}
-        {cart.discounts && cart.discounts.length > 0 && (
-            <View style={styles.appliedDiscountRow}>
-                 <Text style={{ color: 'green', fontSize: 14 }}>
-                    Code: {cart.discounts[0].code} applied
-                 </Text>
-                 <Text 
-                    onPress={handleRemoveCoupon}
-                    style={{ color: 'red', fontSize: 12, textDecorationLine: 'underline' }}>
-                    Remove
-                 </Text>
+            <View style={styles.inputRow}>
+                <TextInput 
+                    style={[
+                        styles.couponInput, 
+                        { 
+                            color: colors.text, 
+                            borderColor: colors.border,
+                            backgroundColor: colorScheme === 'dark' ? '#2C2C2E' : '#F2F2F7'
+                        }
+                    ]}
+                    placeholder="Enter promo code"
+                    placeholderTextColor={colors.icon}
+                    value={promoCode}
+                    onChangeText={setPromoCode}
+                    autoCapitalize="characters"
+                />
+                <Button 
+                    title={applyingPromo ? "" : "Apply"}
+                    onPress={handleApplyCoupon}
+                    style={styles.applyButton}
+                    disabled={applyingPromo || !promoCode}
+                    variant="secondary"
+                >
+                    {applyingPromo && <ActivityIndicator color={colors.text} size="small" />}
+                </Button>
             </View>
-        )}
-        {/* --- COUPON SECTION END --- */}
+
+            {/* List Applied Promotions */}
+            {cart.promotions && cart.promotions.length > 0 && (
+                <View style={styles.promotionsList}>
+                    {cart.promotions.map((promo) => (
+                        <View key={promo.id} style={styles.promoItem}>
+                            <Text style={{ color: 'green', fontSize: 13, fontWeight: '500' }}>
+                                ✓ {promo.code} applied
+                            </Text>
+                            <TouchableOpacity onPress={() => handleRemoveCoupon(promo.code!)}>
+                                <Text style={{ color: '#FF3B30', fontSize: 12 }}>Remove</Text>
+                            </TouchableOpacity>
+                        </View>
+                    ))}
+                </View>
+            )}
+        </View>
+        {/* --- COUPON UI SECTION END --- */}
 
         <View style={styles.totals}>
           <View style={styles.totalRow}>
@@ -152,12 +160,12 @@ export default function CartScreen() {
             </Text>
           </View>
 
-          {/* Display Discount Total if it exists */}
-          {cart.discount_total > 0 && (
+          {/* Discount Row */}
+          {(cart.discount_total || 0) > 0 && (
             <View style={styles.totalRow}>
               <Text style={[styles.totalLabel, { color: 'green' }]}>Discount</Text>
               <Text style={[styles.totalValue, { color: 'green' }]}>
-                -{formatPrice(cart.discount_total, cart.currency_code)}
+                -{formatPrice(cart.discount_total || 0, cart.currency_code)}
               </Text>
             </View>
           )}
@@ -225,28 +233,34 @@ const styles = StyleSheet.create({
     padding: 16,
     borderTopWidth: 1,
   },
-  // Coupon Styles
+  // Added Coupon Styles
   couponContainer: {
-    flexDirection: 'row',
     marginBottom: 16,
+  },
+  inputRow: {
+    flexDirection: 'row',
     gap: 10,
   },
   couponInput: {
     flex: 1,
-    height: 48,
+    height: 44,
     borderWidth: 1,
     borderRadius: 8,
     paddingHorizontal: 12,
-    fontSize: 16,
+    fontSize: 14,
   },
   applyButton: {
-    width: 100,
+    width: 80,
+    height: 44,
   },
-  appliedDiscountRow: {
+  promotionsList: {
+    marginTop: 8,
+  },
+  promoItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    paddingVertical: 4,
     paddingHorizontal: 4,
   },
   // End Coupon Styles
