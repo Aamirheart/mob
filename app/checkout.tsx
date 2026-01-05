@@ -178,8 +178,6 @@ export default function CheckoutScreen() {
     }
   };
 
-  // 👇 FIXED: Pass the full 'cart' object, just like in your frontend repo
-// 👇 FIXED: Use Metadata to pass the URL
   const handlePlaceOrder = async () => {
     if (!selectedPaymentProvider || !cart) {
       Alert.alert('Error', 'Select a payment provider');
@@ -189,44 +187,48 @@ export default function CheckoutScreen() {
     setLoading(true);
 
     try {
+      // 1. Create the Deep Link URL
       const redirectUrl = Linking.createURL('order-confirmation'); 
       console.log("🔗 Redirecting to:", redirectUrl);
 
-      // 1. UPDATE CART METADATA (Pass the URL securely here)
+      // 2. Save URL to Cart Metadata
       await sdk.store.cart.update(cart.id, {
         metadata: {
           mobile_return_url: redirectUrl
         }
       });
 
-      // 2. INITIATE PAYMENT (Pass 'cart' object, NO context/data field)
+      // 3. Initiate Payment
       const response = await sdk.store.payment.initiatePaymentSession(cart, {
         provider_id: selectedPaymentProvider,
       });
 
-      // 3. Handle Cashfree Logic
       const collection = response.payment_collection;
 
+      // 4. Handle Cashfree
       if (selectedPaymentProvider === 'cashfree') {
         const session = collection?.payment_sessions?.find(
           (s) => s.provider_id === 'cashfree'
         );
         
-        // This link comes from the backend service (see Step 2)
         const paymentLink = session?.data?.payment_link as string;
 
         if (paymentLink) {
+          // Open Browser
           const result = await WebBrowser.openAuthSessionAsync(paymentLink, redirectUrl);
-          
-          if (result.type === 'success' || result.type === 'dismiss') {
-            await completeOrder();
+
+          // If successful redirect detected, assume payment is done
+          if (result.type === 'success') {
+            await completeOrder(); // 👈 Now this function handles retries
           } else {
             setLoading(false);
+            Alert.alert("Payment Cancelled", "You closed the payment window.");
           }
           return;
         } 
       }
 
+      // Fallback for Manual/COD
       await completeOrder();
 
     } catch (err: any) {
@@ -235,7 +237,9 @@ export default function CheckoutScreen() {
       setLoading(false);
     }
   };
-  const completeOrder = async () => {
+
+  // 👇 UPDATED: Robust Logic with Retries
+  const completeOrder = async (retryCount = 0) => {
     try {
       if (!cart) return;
       
@@ -244,12 +248,23 @@ export default function CheckoutScreen() {
       if (result.type === 'order') {
         router.replace(`/order-confirmation/${result.order.id}`);
       } else {
-        Alert.alert('Payment Incomplete', result.error?.message || 'Please try paying again.');
+        // If not an order type, check if we should retry
+        throw new Error(result.error?.message || "Unknown error");
       }
     } catch (err: any) {
+      const msg = err.message || "";
+      
+      // If payment is "not authorized" yet, it means Cashfree is slow. Retry!
+      if ((msg.includes("authorized") || msg.includes("pending")) && retryCount < 3) {
+        console.log(`⏳ Payment verification pending... Retrying (${retryCount + 1}/3)`);
+        
+        // Wait 3 seconds, then try again
+        setTimeout(() => completeOrder(retryCount + 1), 3000);
+        return;
+      }
+
       console.error('Completion Error:', err);
-      Alert.alert('Error', err?.message || 'Failed to complete order');
-    } finally {
+      Alert.alert('Error', msg || 'Failed to complete order');
       setLoading(false);
     }
   };
